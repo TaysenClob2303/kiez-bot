@@ -1,98 +1,65 @@
-const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, REST, Routes, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const client = new Client({ 
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] 
-});
+const SOURCE_GUILD_ID = '1532767176715665429';
+const TARGET_GUILD_ID = '1568328146993025154';
 
-const SOURCE_GUILD_ID = '1532767176715665429'; // Inferno Roleplay
-const TARGET_GUILD_ID = '1568328146993025154'; // KIEZ RP
-const CATEGORY_NAME = 'TEAM CHANNEL';
+const commands = [
+  { name: 'kanäle', description: 'Zeigt alle Kategorien von Inferno zum Auswählen' },
+  { name: 'cloneall', description: 'Klont SOFORT die Kategorie TEAM CHANNEL (Notfall)' }
+];
 
-client.on('ready', () => {
-  console.log(`✅ KIEZ Bot online als ${client.user.tag}`);
-  console.log('Bereit zum Klonen! Schreib !clone');
-});
-
-client.on('messageCreate', async (msg) => {
-  if (msg.author.bot) return;
-  if (msg.content !== '!clone') return;
-
+client.on('ready', async () => {
+  console.log(`✅ Online als ${client.user.tag}`);
+  const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
   try {
-    await msg.reply('⏳ Starte Klonen von TEAM CHANNEL...');
-    
-    const sourceGuild = client.guilds.cache.get(SOURCE_GUILD_ID);
-    const targetGuild = client.guilds.cache.get(TARGET_GUILD_ID);
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    await rest.put(Routes.applicationGuildCommands(client.user.id, TARGET_GUILD_ID), { body: commands });
+    console.log('✅ / Befehle registriert - warte 2 Minuten bis Discord sie anzeigt!');
+  } catch(e){ console.error(e); }
+});
 
-    if (!sourceGuild || !targetGuild) {
-      return msg.reply('❌ Bot ist nicht in beiden Servern! Lade ihn in beide Server ein mit Admin Rechten.');
-    }
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand() && !interaction.isStringSelectMenu()) return;
 
-    const sourceCategory = sourceGuild.channels.cache.find(c => c.name === CATEGORY_NAME && c.type === ChannelType.GuildCategory);
-    if (!sourceCategory) {
-      return msg.reply(`❌ Kategorie "${CATEGORY_NAME}" auf Inferno nicht gefunden.`);
-    }
+  const sourceGuild = client.guilds.cache.get(SOURCE_GUILD_ID);
+  const targetGuild = client.guilds.cache.get(TARGET_GUILD_ID);
 
-    const sourceChannels = sourceGuild.channels.cache
-      .filter(c => c.parentId === sourceCategory.id)
-      .sort((a,b) => a.position - b.position);
+  if (interaction.commandName === 'kanäle') {
+    if (!sourceGuild) return interaction.reply({ content: 'Bot nicht auf Inferno!', ephemeral: true });
+    const cats = sourceGuild.channels.cache.filter(c => c.type === ChannelType.GuildCategory).sort((a,b)=>a.position-b.position);
+    const options = cats.map(cat => new StringSelectMenuOptionBuilder().setLabel(cat.name.slice(0,100)).setDescription(`${sourceGuild.channels.cache.filter(ch=>ch.parentId===cat.id).size} Kanäle`.slice(0,100)).setValue(cat.id)).slice(0,25);
+    const menu = new StringSelectMenuBuilder().setCustomId('clone_select').setPlaceholder('Wähle Kategorien...').setMinValues(1).setMaxValues(options.length).addOptions(options);
+    const row = new ActionRowBuilder().addComponents(menu);
+    const embed = new EmbedBuilder().setTitle('📋 Inferno Kategorien').setDescription(`Wähle was nach KIEZ RP geklont werden soll`).setColor(0x00FF00);
+    return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+  }
 
-    if (sourceChannels.size === 0) {
-      return msg.reply(`⚠️ Kategorie gefunden, aber 0 Kanäle drin.`);
-    }
+  if (interaction.commandName === 'cloneall') {
+    await interaction.reply('⏳ Clone TEAM CHANNEL...');
+    const cat = sourceGuild.channels.cache.find(c=>c.name==='TEAM CHANNEL' && c.type===ChannelType.GuildCategory);
+    if(!cat) return interaction.editReply('TEAM CHANNEL nicht gefunden!');
+    const chans = sourceGuild.channels.cache.filter(c=>c.parentId===cat.id);
+    const targetCat = await targetGuild.channels.create({ name: cat.name, type: ChannelType.GuildCategory });
+    for (const [id,ch] of chans) { await targetGuild.channels.create({ name: ch.name, type: ch.type, parent: targetCat.id }); }
+    return interaction.editReply(`✅ ${chans.size} Kanäle geklont!`);
+  }
 
-    await msg.channel.send(`🔍 ${sourceChannels.size} Kanäle gefunden, erstelle jetzt auf KIEZ RP...`);
-
-    const targetCategory = await targetGuild.channels.create({
-      name: sourceCategory.name,
-      type: ChannelType.GuildCategory,
-    });
-
-    for (const [id, sourceChannel] of sourceChannels) {
-      try {
-        const overwrites = [];
-        for (const [owId, ow] of sourceChannel.permissionOverwrites.cache) {
-          let targetId = ow.id;
-          if (ow.type === 0) { // Rolle
-            const sourceRole = sourceGuild.roles.cache.get(ow.id);
-            if (sourceRole) {
-              const targetRole = targetGuild.roles.cache.find(r => r.name === sourceRole.name);
-              if (targetRole) targetId = targetRole.id;
-            }
-          }
-          overwrites.push({
-            id: targetId,
-            allow: ow.allow.bitfield,
-            deny: ow.deny.bitfield,
-            type: ow.type
-          });
-        }
-
-        await targetGuild.channels.create({
-          name: sourceChannel.name,
-          type: sourceChannel.type,
-          parent: targetCategory.id,
-          permissionOverwrites: overwrites,
-          topic: sourceChannel.topic || null,
-        });
-        console.log(`✅ Erstellt: ${sourceChannel.name}`);
-      } catch (e) {
-        console.log(`❌ Fehler bei ${sourceChannel.name}: ${e.message}`);
-        await msg.channel.send(`❌ Fehler bei ${sourceChannel.name}: ${e.message}`);
+  if (interaction.isStringSelectMenu() && interaction.customId === 'clone_select') {
+    await interaction.deferReply({ ephemeral: true });
+    let log = '';
+    for (const catId of interaction.values) {
+      const srcCat = sourceGuild.channels.cache.get(catId);
+      const srcChans = sourceGuild.channels.cache.filter(c=>c.parentId===srcCat.id).sort((a,b)=>a.position-b.position);
+      const tgtCat = await targetGuild.channels.create({ name: srcCat.name, type: ChannelType.GuildCategory });
+      log += `📁 ${srcCat.name}\n`;
+      for (const [id,ch] of srcChans) {
+        await targetGuild.channels.create({ name: ch.name, type: ch.type, parent: tgtCat.id, topic: ch.topic||null });
+        log += ` └─ ${ch.name}\n`;
       }
     }
-
-    await msg.channel.send(`✅ Fertig! ${sourceChannels.size} Kanäle in Kategorie ${targetCategory.name} geklont!`);
-
-  } catch (err) {
-    console.error(err);
-    msg.reply(`❌ Schwerer Fehler: ${err.message}`);
+    return interaction.editReply(`✅ Fertig geklont:\n${log}`);
   }
 });
 
-// WICHTIG FÜR DISCLOUD:
-const token = process.env.BOT_TOKEN || process.env.TOKEN;
-if (!token) {
-  console.error('❌ Kein BOT_TOKEN gefunden! In Discloud RAM -> Env eintragen!');
-  process.exit(1);
-}
-client.login(token);
+client.login(process.env.BOT_TOKEN);
