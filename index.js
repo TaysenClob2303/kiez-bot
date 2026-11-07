@@ -29,7 +29,7 @@ client.on('messageCreate', async (msg) => {
 
     const sourceCategory = sourceGuild.channels.cache.find(c => c.name === CATEGORY_NAME && c.type === ChannelType.GuildCategory);
     if (!sourceCategory) {
-      return msg.reply(`❌ Kategorie "${CATEGORY_NAME}" auf Inferno nicht gefunden. Heißt sie wirklich genau so? Groß/Klein beachten!`);
+      return msg.reply(`❌ Kategorie "${CATEGORY_NAME}" auf Inferno nicht gefunden.`);
     }
 
     const sourceChannels = sourceGuild.channels.cache
@@ -40,14 +40,59 @@ client.on('messageCreate', async (msg) => {
       return msg.reply(`⚠️ Kategorie gefunden, aber 0 Kanäle drin.`);
     }
 
-    msg.reply(`🔍 ${sourceChannels.size} Kanäle gefunden, erstelle jetzt auf KIEZ RP...`);
+    await msg.channel.send(`🔍 ${sourceChannels.size} Kanäle gefunden, erstelle jetzt auf KIEZ RP...`);
 
     const targetCategory = await targetGuild.channels.create({
       name: sourceCategory.name,
       type: ChannelType.GuildCategory,
     });
 
-    const mapPermissions = (overwrites) => {
-      return overwrites.map(ow => {
-        let targetRoleId = ow.id;
-        if (ow.type === 0) {
+    for (const [id, sourceChannel] of sourceChannels) {
+      try {
+        const overwrites = [];
+        for (const [owId, ow] of sourceChannel.permissionOverwrites.cache) {
+          let targetId = ow.id;
+          if (ow.type === 0) { // Rolle
+            const sourceRole = sourceGuild.roles.cache.get(ow.id);
+            if (sourceRole) {
+              const targetRole = targetGuild.roles.cache.find(r => r.name === sourceRole.name);
+              if (targetRole) targetId = targetRole.id;
+            }
+          }
+          overwrites.push({
+            id: targetId,
+            allow: ow.allow.bitfield,
+            deny: ow.deny.bitfield,
+            type: ow.type
+          });
+        }
+
+        await targetGuild.channels.create({
+          name: sourceChannel.name,
+          type: sourceChannel.type,
+          parent: targetCategory.id,
+          permissionOverwrites: overwrites,
+          topic: sourceChannel.topic || null,
+        });
+        console.log(`✅ Erstellt: ${sourceChannel.name}`);
+      } catch (e) {
+        console.log(`❌ Fehler bei ${sourceChannel.name}: ${e.message}`);
+        await msg.channel.send(`❌ Fehler bei ${sourceChannel.name}: ${e.message}`);
+      }
+    }
+
+    await msg.channel.send(`✅ Fertig! ${sourceChannels.size} Kanäle in Kategorie ${targetCategory.name} geklont!`);
+
+  } catch (err) {
+    console.error(err);
+    msg.reply(`❌ Schwerer Fehler: ${err.message}`);
+  }
+});
+
+// WICHTIG FÜR DISCLOUD:
+const token = process.env.BOT_TOKEN || process.env.TOKEN;
+if (!token) {
+  console.error('❌ Kein BOT_TOKEN gefunden! In Discloud RAM -> Env eintragen!');
+  process.exit(1);
+}
+client.login(token);
