@@ -1,0 +1,5 @@
+ID=kiez
+TYPE=bot
+MAIN=index.js
+RAM=512
+VERSION=latest
